@@ -1,0 +1,98 @@
+import discord
+import tensorflow as tf
+import numpy as np
+from PIL import Image
+import os
+
+# --- Configuración del Bot ---
+TOKEN = "MTMwODU4NjQ0NTI0OTcwODE1Mg.G1UNsB.YZwjDgqMD-wyFsQUazJrUXRN8zhqZAgVd89Mi4"
+
+# Configura los intents (privilegios) necesarios
+intents = discord.Intents.default()
+intents.message_content = True
+
+bot = discord.Client(intents=intents)
+
+# --- Rutas de archivos (¡Ajusta estas rutas!) ---
+MODEL_PATH = "mi_modelo_de_ia.h5"  # Nombre de tu modelo .h5
+LABELS_PATH = "etiquetas.txt"       # Nombre de tu archivo de etiquetas .txt
+TEMP_IMAGE_PATH = "temp_image.png"
+
+# --- Función de Inferencia del Modelo ---
+def get_class(image_path):
+    """
+    Realiza la clasificación de una imagen usando un modelo de Keras/TensorFlow.
+    Devuelve la clase predicha y la probabilidad de confianza.
+    """
+    try:
+        # Carga el modelo y las etiquetas
+        model = tf.keras.models.load_model(MODEL_PATH)
+        with open(LABELS_PATH, 'r', encoding='utf-8') as f:
+            labels = [line.strip() for line in f.readlines()]
+
+        # Carga, procesa y prepara la imagen para la predicción
+        img = Image.open(image_path).convert('RGB')
+        img = img.resize((224, 224)) # Asegúrate de que el tamaño coincida con el de tu modelo
+        img_array = np.array(img) / 255.0
+        img_array = np.expand_dims(img_array, axis=0)
+        
+        # Realiza la predicción
+        predictions = model.predict(img_array, verbose=0)
+        predicted_class_index = np.argmax(predictions)
+        predicted_class = labels[predicted_class_index]
+        confidence = predictions[0][predicted_class_index]
+
+        return predicted_class, confidence
+    
+    except Exception as e:
+        print(f"Error en la inferencia del modelo: {e}")
+        return None, None
+
+# --- Eventos del Bot de Discord ---
+@bot.event
+async def on_ready():
+    """Se ejecuta cuando el bot se conecta a Discord."""
+    print(f"El bot {bot.user} se ha conectado a Discord.")
+
+@bot.event
+async def on_message(message):
+    """Se ejecuta cada vez que se envía un mensaje."""
+    # Ignora los mensajes del propio bot
+    if message.author == bot.user:
+        return
+
+    # Procesa solo si el mensaje contiene un archivo adjunto
+    if message.attachments:
+        attachment = message.attachments[0]
+        
+        # Verifica si el archivo es una imagen
+        if "image" in attachment.content_type:
+            try:
+                # Guarda la imagen temporalmente
+                await attachment.save(TEMP_IMAGE_PATH)
+                
+                # Realiza la clasificación
+                predicted_class, confidence = get_class(TEMP_IMAGE_PATH)
+
+                # Envía la respuesta al canal
+                if predicted_class:
+                    if confidence < 0.6:  # Umbral de confianza
+                        response_message = (f"🤔 Hmm, no estoy seguro, pero creo que podría ser un(a) **{predicted_class}** "
+                                            f"(confianza: {confidence:.2f}).")
+                    else:
+                        response_message = f"🎉 ¡He reconocido un(a) **{predicted_class}** en la imagen!"
+                else:
+                    response_message = "❌ Ha ocurrido un error al procesar la imagen. Asegúrate de que el modelo y las etiquetas son correctas."
+
+                await message.channel.send(response_message)
+            
+            except Exception as e:
+                await message.channel.send("❌ Lo siento, no pude procesar tu imagen.")
+            
+            finally:
+                # Elimina la imagen temporal
+                if os.path.exists(TEMP_IMAGE_PATH):
+                    os.remove(TEMP_IMAGE_PATH)
+
+# --- Ejecución del Bot ---
+bot.run(TOKEN)
